@@ -1,6 +1,7 @@
 # Sensitive data
 users.json
 chat_history.db
+api_keys.json
 
 # Uploads
 uploads/

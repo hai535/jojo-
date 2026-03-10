@@ -17,104 +17,148 @@ def get_conn():
 
 def init_db():
     conn = get_conn()
+    # New key-value conversations table
     conn.executescript("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            id TEXT PRIMARY KEY,
-            title TEXT DEFAULT '',
+        CREATE TABLE IF NOT EXISTS conversations (
+            name TEXT PRIMARY KEY,
+            messages TEXT NOT NULL DEFAULT '[]',
+            user TEXT NOT NULL DEFAULT '',
             created_at REAL,
-            updated_at REAL,
-            user TEXT DEFAULT ''
+            updated_at REAL
         );
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            created_at REAL,
-            FOREIGN KEY (session_id) REFERENCES sessions(id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
     """)
-    # Add user column if missing (migration)
+    conn.commit()
+    _migrate_old_tables(conn)
+
+
+def _migrate_old_tables(conn):
+    """Migrate data from old sessions+messages tables to new conversations table."""
     try:
-        conn.execute("SELECT user FROM sessions LIMIT 1")
+        conn.execute("SELECT 1 FROM sessions LIMIT 1")
     except sqlite3.OperationalError:
-        conn.execute("ALTER TABLE sessions ADD COLUMN user TEXT DEFAULT ''")
-    # Assign existing sessions without user to 'shamless'
-    conn.execute("UPDATE sessions SET user = 'shamless' WHERE user = '' OR user IS NULL")
+        return  # No old tables, nothing to migrate
+
+    rows = conn.execute("SELECT id, title, created_at, updated_at, user FROM sessions").fetchall()
+    for s in rows:
+        sid = s["id"]
+        title = s["title"] or sid
+        user = s["user"] or ""
+        msgs = conn.execute(
+            "SELECT role, content, created_at FROM messages WHERE session_id = ? ORDER BY id", (sid,)
+        ).fetchall()
+        msg_list = [{"role": m["role"], "content": m["content"], "created_at": m["created_at"]} for m in msgs]
+        # Only migrate if not already in new table
+        existing = conn.execute("SELECT 1 FROM conversations WHERE name = ?", (title,)).fetchone()
+        if not existing:
+            conn.execute(
+                "INSERT INTO conversations (name, messages, user, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (title, json.dumps(msg_list, ensure_ascii=False), user, s["created_at"], s["updated_at"]),
+            )
+    conn.execute("DROP TABLE IF EXISTS messages")
+    conn.execute("DROP TABLE IF EXISTS sessions")
     conn.commit()
 
 
-def create_session(session_id, title="", user=""):
+def save_conversation(name, messages, user=""):
+    """Save or update a conversation. messages is a list of dicts."""
     conn = get_conn()
     now = time.time()
-    conn.execute(
-        "INSERT OR IGNORE INTO sessions (id, title, created_at, updated_at, user) VALUES (?, ?, ?, ?, ?)",
-        (session_id, title, now, now, user),
-    )
+    existing = conn.execute("SELECT 1 FROM conversations WHERE name = ?", (name,)).fetchone()
+    if existing:
+        conn.execute(
+            "UPDATE conversations SET messages = ?, updated_at = ? WHERE name = ?",
+            (json.dumps(messages, ensure_ascii=False), now, name),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO conversations (name, messages, user, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (name, json.dumps(messages, ensure_ascii=False), user, now, now),
+        )
     conn.commit()
 
 
-def update_session_title(session_id, title):
+def get_conversation(name):
+    """Get a conversation by name. Returns dict with name, messages, user, etc. or None."""
     conn = get_conn()
-    conn.execute("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?", (title, time.time(), session_id))
-    conn.commit()
+    row = conn.execute("SELECT * FROM conversations WHERE name = ?", (name,)).fetchone()
+    if not row:
+        return None
+    return {
+        "name": row["name"],
+        "messages": json.loads(row["messages"]),
+        "user": row["user"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
 
 
-def add_message(session_id, role, content, user=""):
+def add_message(name, role, content, user=""):
+    """Add a message to a conversation. Creates the conversation if it doesn't exist."""
     conn = get_conn()
     now = time.time()
-    # Ensure session exists
-    create_session(session_id, user=user)
+    existing = conn.execute("SELECT messages FROM conversations WHERE name = ?", (name,)).fetchone()
+    if existing:
+        msgs = json.loads(existing["messages"])
+    else:
+        msgs = []
+        conn.execute(
+            "INSERT INTO conversations (name, messages, user, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (name, "[]", user, now, now),
+        )
+    msgs.append({"role": role, "content": content, "created_at": now})
     conn.execute(
-        "INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)",
-        (session_id, role, content, now),
+        "UPDATE conversations SET messages = ?, updated_at = ? WHERE name = ?",
+        (json.dumps(msgs, ensure_ascii=False), now, name),
     )
-    conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id))
     conn.commit()
-
-    # Auto-set title from first user message
-    row = conn.execute("SELECT title FROM sessions WHERE id = ?", (session_id,)).fetchone()
-    if row and not row["title"] and role == "user":
-        title = content[:50] + ("..." if len(content) > 50 else "")
-        update_session_title(session_id, title)
+    return msgs
 
 
-def get_messages(session_id):
+def list_conversations(user="", limit=50):
+    """List all conversations for a user, sorted by updated_at desc."""
     conn = get_conn()
     rows = conn.execute(
-        "SELECT role, content, created_at FROM messages WHERE session_id = ? ORDER BY id",
-        (session_id,),
-    ).fetchall()
-    return [{"role": r["role"], "content": r["content"], "created_at": r["created_at"]} for r in rows]
-
-
-def list_sessions(user="", limit=50):
-    conn = get_conn()
-    rows = conn.execute(
-        "SELECT id, title, created_at, updated_at FROM sessions WHERE user = ? ORDER BY updated_at DESC LIMIT ?",
+        "SELECT name, created_at, updated_at FROM conversations WHERE user = ? ORDER BY updated_at DESC LIMIT ?",
         (user, limit),
     ).fetchall()
-    return [{"id": r["id"], "title": r["title"], "created_at": r["created_at"], "updated_at": r["updated_at"]} for r in rows]
+    return [{"name": r["name"], "created_at": r["created_at"], "updated_at": r["updated_at"]} for r in rows]
 
 
-def delete_session(session_id):
+def get_messages(name):
+    """Get messages for a conversation. Returns list of message dicts."""
+    conv = get_conversation(name)
+    if not conv:
+        return []
+    return conv["messages"]
+
+
+def delete_conversation(name):
+    """Delete a conversation by name."""
     conn = get_conn()
-    conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
-    conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+    conn.execute("DELETE FROM conversations WHERE name = ?", (name,))
     conn.commit()
 
 
-def clear_user_sessions(user):
+def rename_conversation(old_name, new_name):
+    """Rename a conversation."""
     conn = get_conn()
-    session_ids = conn.execute("SELECT id FROM sessions WHERE user = ?", (user,)).fetchall()
-    for row in session_ids:
-        conn.execute("DELETE FROM messages WHERE session_id = ?", (row["id"],))
-    conn.execute("DELETE FROM sessions WHERE user = ?", (user,))
+    now = time.time()
+    conn.execute(
+        "UPDATE conversations SET name = ?, updated_at = ? WHERE name = ?",
+        (new_name, now, old_name),
+    )
+    conn.commit()
+
+
+def clear_user_conversations(user):
+    """Delete all conversations for a user."""
+    conn = get_conn()
+    conn.execute("DELETE FROM conversations WHERE user = ?", (user,))
     conn.commit()
 
 
 def rename_user(old_user, new_user):
+    """Rename user across all conversations."""
     conn = get_conn()
-    conn.execute("UPDATE sessions SET user = ? WHERE user = ?", (new_user, old_user))
+    conn.execute("UPDATE conversations SET user = ? WHERE user = ?", (new_user, old_user))
     conn.commit()

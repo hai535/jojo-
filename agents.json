@@ -1,0 +1,66 @@
+[
+  {
+    "id": "fe263d45",
+    "name": "产品经理PM",
+    "model": "claude-api",
+    "role": "设计产品思路",
+    "system_prompt": "",
+    "color": "#00aaff"
+  },
+  {
+    "id": "83552e16",
+    "name": "开发者",
+    "model": "claude-api",
+    "role": "开发产品",
+    "system_prompt": "",
+    "color": "#ff6b6b"
+  },
+  {
+    "id": "612a07cf",
+    "name": "测试者",
+    "model": "deepseek",
+    "role": "test开发的产品",
+    "system_prompt": "",
+    "color": "#c084fc"
+  },
+  {
+    "id": "c40aff67",
+    "name": "开发者-前端",
+    "model": "claude-cli",
+    "role": "",
+    "system_prompt": "",
+    "color": "#ff6b6b"
+  },
+  {
+    "id": "e4b904e7",
+    "name": "开发者-后端",
+    "model": "claude-cli",
+    "role": "",
+    "system_prompt": "",
+    "color": "#ff6b6b"
+  },
+  {
+    "id": "0fccbcec",
+    "name": "人生导师",
+    "model": "deepseek",
+    "role": "LLM对话",
+    "system_prompt": "",
+    "color": "#f472b6"
+  },
+  {
+    "id": "afb23658",
+    "name": "营销AI",
+    "model": "claude-cli",
+    "role": "",
+    "system_prompt": "",
+    "color": "#ffd93d"
+  },
+  {
+    "id": "dc4195fe",
+    "name": "数据分析师",
+    "model": "claude-cli",
+    "role": "DA(data analysis)",
+    "system_prompt": "",
+    "color": "#00ff88"
+  }
+]
